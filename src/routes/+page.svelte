@@ -1,6 +1,10 @@
 <script lang="ts">
     import { invoke } from "@tauri-apps/api/core";
     import { getCurrentWindow } from "@tauri-apps/api/window";
+    import { openUrl } from "@tauri-apps/plugin-opener";
+    import { check, type Update } from "@tauri-apps/plugin-updater";
+    import { relaunch } from "@tauri-apps/plugin-process";
+    import { onMount } from "svelte";
     import StatBar from "./StatBar.svelte";
     import StatHex from "./StatHex.svelte";
     import ProfileRing from "./ProfileRing.svelte";
@@ -114,6 +118,74 @@
         if ((e.target as HTMLElement).closest("button, input, a")) return;
         getCurrentWindow().startDragging();
     }
+
+    // --- обновления (updater-плагин) ---
+    // фаза управляет модалкой; "idle" — модалки нет
+    type UpdatePhase =
+        | "idle"
+        | "checking"
+        | "available"
+        | "installing"
+        | "uptodate"
+        | "error";
+    let phase = $state<UpdatePhase>("idle");
+    let updateInfo = $state<Update | null>(null);
+    let updateError = $state("");
+    let checking = $state(false);
+    let updating = $state(false);
+    let autoCheck = $state(load("autoCheck", true));
+    let updateToken = 0; // инвалидирует текущую проверку при отмене
+    $effect(() => save("autoCheck", autoCheck));
+
+    async function checkUpdate(manual = false) {
+        if (checking || updating) return;
+        const token = ++updateToken;
+        checking = true;
+        if (manual) phase = "checking"; // авто-проверка молчит, если апдейта нет
+        try {
+            const u = await check();
+            if (token !== updateToken) return; // отменили — результат игнорим
+            if (u) {
+                updateInfo = u;
+                phase = "available";
+            } else if (manual) {
+                phase = "uptodate";
+            }
+        } catch (e) {
+            console.error(e);
+            if (token === updateToken && manual) {
+                updateError = String(e);
+                phase = "error";
+            }
+        } finally {
+            if (token === updateToken) checking = false;
+        }
+    }
+
+    function cancelUpdate() {
+        updateToken++; // идущая проверка больше не применится
+        checking = false;
+        phase = "idle";
+    }
+
+    async function installUpdate() {
+        if (!updateInfo || updating) return;
+        updating = true;
+        phase = "installing";
+        try {
+            await updateInfo.downloadAndInstall(); // качает, проверяет подпись, ставит
+            await relaunch();
+        } catch (e) {
+            console.error(e);
+            updateError = String(e);
+            phase = "error";
+            updating = false;
+        }
+    }
+
+    onMount(() => {
+        if (autoCheck) checkUpdate(false); // тихая авто-проверка при старте
+    });
 
     // цвет по типу — рамка, бейджи, гекс, контролы
     const TYPE_COLORS: Record<string, string> = {
@@ -363,6 +435,98 @@
                         />
                     </div>
                 {/if}
+
+                <div class="sp-group">
+                    <span class="sp-label">Updates</span>
+                    <label class="toggle">
+                        <input type="checkbox" bind:checked={autoCheck} />
+                        <span>Auto-check on start</span>
+                    </label>
+                    <button
+                        class="update-btn ghost"
+                        onclick={() => checkUpdate(true)}
+                        disabled={checking || updating}
+                    >
+                        Check for updates
+                    </button>
+                </div>
+
+                <div class="sp-footer">
+                    <button
+                        class="link-btn"
+                        onclick={() => openUrl("https://github.com/vdzhagaev/pokeroll")}
+                        title="GitHub"
+                        aria-label="GitHub"
+                    >
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path
+                                d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58 0-.29-.01-1.05-.02-2.06-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.21.09 1.84 1.24 1.84 1.24 1.07 1.84 2.81 1.31 3.5 1 .11-.78.42-1.31.76-1.61-2.67-.3-5.47-1.34-5.47-5.95 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.17 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.65.24 2.87.12 3.17.77.84 1.24 1.91 1.24 3.22 0 4.62-2.81 5.64-5.49 5.94.43.37.81 1.1.81 2.22 0 1.6-.01 2.89-.01 3.29 0 .32.22.7.83.58A12.01 12.01 0 0 0 24 12.5C24 5.87 18.63.5 12 .5Z"
+                            />
+                        </svg>
+                    </button>
+                    <button
+                        class="link-btn"
+                        onclick={() => openUrl("mailto:slava.dzhagaev@proton.me")}
+                        title="Email"
+                        aria-label="Email"
+                    >
+                        <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        >
+                            <rect x="3" y="5" width="18" height="14" rx="2" />
+                            <path d="m3 7 9 6 9-6" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        {/if}
+
+        <!-- модалка обновления: проверка / подтверждение / установка / результат -->
+        {#if phase !== "idle"}
+            <div class="update-modal" onmousedown={(e) => e.stopPropagation()}>
+                <div class="um-box">
+                    {#if phase === "checking" || phase === "installing"}
+                        <div class="spinner"></div>
+                    {/if}
+
+                    <div class="um-title">
+                        {#if phase === "checking"}
+                            Checking for updates…
+                        {:else if phase === "installing"}
+                            Installing update…
+                        {:else if phase === "available"}
+                            Install update v{updateInfo?.version}?
+                        {:else if phase === "uptodate"}
+                            Already up to date
+                        {:else}
+                            Update failed
+                        {/if}
+                    </div>
+
+                    {#if phase === "available" && updateInfo?.body}
+                        <pre class="um-notes">{updateInfo.body}</pre>
+                    {:else if phase === "error" && updateError}
+                        <pre class="um-notes um-err">{updateError}</pre>
+                    {/if}
+
+                    <div class="um-actions">
+                        {#if phase === "checking"}
+                            <button class="update-btn ghost" onclick={cancelUpdate}>Cancel</button>
+                        {:else if phase === "available"}
+                            <button class="update-btn" onclick={installUpdate}>Install</button>
+                            <button class="update-btn ghost" onclick={cancelUpdate}>Cancel</button>
+                        {:else if phase === "uptodate" || phase === "error"}
+                            <button class="update-btn ghost" onclick={() => (phase = "idle")}>
+                                Close
+                            </button>
+                        {/if}
+                    </div>
+                </div>
             </div>
         {/if}
     </div>
@@ -794,6 +958,126 @@
         height: 16px;
         cursor: pointer;
         accent-color: var(--accent);
+    }
+
+    /* футер настроек: ссылки на гитхаб/почту */
+    .sp-footer {
+        margin-top: auto; /* прижать к низу панели */
+        display: flex;
+        justify-content: center;
+        gap: 0.8em;
+        padding-top: 0.4em;
+    }
+    .link-btn {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border-radius: 8px;
+        border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+        background: color-mix(in srgb, var(--accent) 10%, transparent);
+        color: inherit;
+        cursor: pointer;
+        transition:
+            background 0.15s,
+            transform 0.12s;
+    }
+    .link-btn:hover {
+        background: color-mix(in srgb, var(--accent) 22%, transparent);
+        transform: translateY(-1px);
+    }
+    .link-btn svg {
+        width: 18px;
+        height: 18px;
+    }
+
+    /* модалка обновления */
+    .update-modal {
+        position: absolute;
+        inset: 0;
+        z-index: 6;
+        display: grid;
+        place-items: center;
+        padding: 1.4em;
+        border-radius: 8px;
+        background: color-mix(in srgb, #000 48%, transparent);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+    }
+    .um-box {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1em;
+        max-width: 88%;
+        padding: 1.5em 1.6em;
+        border-radius: 12px;
+        background: var(--card-bg);
+        border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+        box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+        text-align: center;
+    }
+    .um-title {
+        font-weight: 800;
+        font-size: 1.02em;
+    }
+    .um-notes {
+        margin: 0;
+        max-width: 100%;
+        max-height: 160px;
+        overflow: auto;
+        padding: 0.7em 0.9em;
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--accent) 8%, transparent);
+        font-family: inherit;
+        font-size: 0.82em;
+        line-height: 1.4;
+        white-space: pre-wrap;
+        text-align: left;
+        opacity: 0.9;
+    }
+    .um-err {
+        background: color-mix(in srgb, #e5484d 14%, transparent);
+        color: #e5484d;
+    }
+    .um-actions {
+        display: flex;
+        gap: 0.6em;
+    }
+    .spinner {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 3px solid color-mix(in srgb, var(--accent) 22%, transparent);
+        border-top-color: var(--accent);
+        animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+    .update-btn {
+        padding: 0.5em 1em;
+        border-radius: 8px;
+        border: none;
+        background: var(--accent);
+        color: #fff;
+        font-weight: 700;
+        cursor: pointer;
+        transition: filter 0.15s;
+    }
+    .update-btn:hover {
+        filter: brightness(1.08);
+    }
+    .update-btn:disabled {
+        opacity: 0.6;
+        cursor: default;
+    }
+    .update-btn.ghost {
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        color: inherit;
+        border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
     }
 
     @media (prefers-color-scheme: dark) {

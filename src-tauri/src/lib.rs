@@ -24,6 +24,8 @@ pub fn run() {
             show_main(app);
         }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![pokemon::roll])
         .setup(|app| {
             // меню трея: пункты ловим по id в on_menu_event

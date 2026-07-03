@@ -1,6 +1,6 @@
 {
   "name": "pokeroll",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "packageManager": "pnpm@11.3.0",
   "description": "Desktop widget that rolls a random Pokemon from PokeAPI",
   "type": "module",
@@ -15,7 +15,9 @@
   "license": "MIT",
   "dependencies": {
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-process": "^2",
+    "@tauri-apps/plugin-updater": "^2"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.6",

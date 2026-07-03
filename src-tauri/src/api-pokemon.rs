@@ -1,0 +1,3 @@
+struct ApiNamed {
+    name: String,
+}

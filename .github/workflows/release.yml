@@ -33,9 +33,7 @@ jobs:
             libayatana-appindicator3-dev
 
       - name: install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        uses: pnpm/action-setup@v4 # version taken from package.json packageManager
 
       - name: setup node
         uses: actions/setup-node@v4

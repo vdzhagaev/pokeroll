@@ -9,6 +9,7 @@ use tauri::{
 // показать окно и вернуть ему фокус
 fn show_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
     }
@@ -17,6 +18,11 @@ fn show_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // single-instance ДОЛЖЕН быть первым плагином. вторая копия не стартует —
+        // вместо неё этот колбэк срабатывает в уже запущенном экземпляре
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![pokemon::roll])
         .setup(|app| {

@@ -3,7 +3,6 @@
     import { getCurrentWindow } from "@tauri-apps/api/window";
     import StatBar from "./StatBar.svelte";
     import StatHex from "./StatHex.svelte";
-    import ExpBar from "./ExpBar.svelte";
     import ProfileRing from "./ProfileRing.svelte";
     import AsciiSprite from "./AsciiSprite.svelte";
 
@@ -52,6 +51,20 @@
     const seen = new Set<number>(load<number[]>("seen", []));
     let totalXp = $state(load("xp", 0));
 
+    // всплывашки «+N EXP»: список активных, каждая со своим id и позицией —
+    // несколько могут лететь одновременно, удаляются по концу анимации
+    type ExpFloat = { id: number; value: number; x: number; y: number };
+    let floats = $state<ExpFloat[]>([]);
+    let floatSeq = 0;
+    function spawnExp(value: number) {
+        const x = 12 + Math.random() * 72; // % по горизонтали
+        const y = 18 + Math.random() * 54; // % по вертикали
+        floats.push({ id: floatSeq++, value, x, y });
+    }
+    function removeFloat(id: number) {
+        floats = floats.filter((f) => f.id !== id);
+    }
+
     const XP_PER_LEVEL = 100;
     let level = $derived(Math.floor(totalXp / XP_PER_LEVEL) + 1);
     let levelProgress = $derived(((totalXp % XP_PER_LEVEL) / XP_PER_LEVEL) * 100);
@@ -80,12 +93,27 @@
     let pixelCols = $state(load("pixelCols", 24));
     let asciiCols = $state(load("asciiCols", 32));
 
+    // поверх всех окон — переключаемо в настройках
+    let alwaysOnTop = $state(load("alwaysOnTop", true));
+
     // пишем обратно при любом изменении
     $effect(() => save("statView", statView));
     $effect(() => save("imageMode", imageMode));
     $effect(() => save("xp", totalXp));
     $effect(() => save("pixelCols", pixelCols));
     $effect(() => save("asciiCols", asciiCols));
+    // сохраняем и сразу применяем к окну (в т.ч. восстанавливаем при старте)
+    $effect(() => {
+        save("alwaysOnTop", alwaysOnTop);
+        getCurrentWindow().setAlwaysOnTop(alwaysOnTop);
+    });
+
+    // тащим окно за карту; по кнопкам/инпутам — не таскаем
+    function startDrag(e: MouseEvent) {
+        if (e.button !== 0) return;
+        if ((e.target as HTMLElement).closest("button, input, a")) return;
+        getCurrentWindow().startDragging();
+    }
 
     // цвет по типу — рамка, бейджи, гекс, контролы
     const TYPE_COLORS: Record<string, string> = {
@@ -125,6 +153,7 @@
             seen.add(p.id);
             if (isNew) save("seen", [...seen]); // покедекс на диск
             totalXp += p.baseExperience;
+            spawnExp(p.baseExperience); // всплывашка в случайном месте
             imgLoaded = false;
             pokemon = p;
         } catch (e) {
@@ -142,6 +171,7 @@
         class:hide-stats={statView === "none"}
         style:--accent={accent}
         style:--border-gradient={borderGradient}
+        onmousedown={startDrag}
         data-tauri-drag-region
     >
         <!-- уровень слева-сверху -->
@@ -235,25 +265,32 @@
                         </div>
                     {/if}
                 </div>
-
-                <ExpBar value={pokemon.baseExperience} />
             {/key}
         {:else}
             <div class="empty">Press the button below to roll a Pokémon</div>
         {/if}
 
+        <!-- «+N EXP» в случайных точках; несколько летят одновременно -->
+        {#each floats as f (f.id)}
+            <div
+                class="exp-float"
+                style:left="{f.x}%"
+                style:top="{f.y}%"
+                onanimationend={() => removeFloat(f.id)}
+            >
+                +{f.value} EXP
+            </div>
+        {/each}
+
         <!-- главное действие -->
         <button
             class="roll-fab"
-            class:spinning={loading}
+            class:loading
             onclick={roll}
+            disabled={loading}
             title="Roll"
-            aria-label="Roll"
         >
-            <svg viewBox="0 0 24 24">
-                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-                <path d="M21 3v6h-6" />
-            </svg>
+            {loading ? "…" : "ROLL"}
         </button>
 
         <!-- панель настроек поверх карты -->
@@ -290,6 +327,14 @@
                             </button>
                         {/each}
                     </div>
+                </div>
+
+                <div class="sp-group">
+                    <span class="sp-label">Window</span>
+                    <label class="toggle">
+                        <input type="checkbox" bind:checked={alwaysOnTop} />
+                        <span>Always on top</span>
+                    </label>
                 </div>
 
                 <!-- зерно показываем только для пиксель/ascii -->
@@ -347,7 +392,7 @@
     .container {
         box-sizing: border-box;
         height: 100vh;
-        padding: 32px;
+        padding: 0; /* без прозрачных отступов вообще */
         display: flex;
         overflow: hidden;
         background: transparent;
@@ -360,7 +405,7 @@
         flex-direction: column;
         padding: 1.2em 1.4em 2em;
         --card-bg: #ffffff;
-        border-radius: 16px;
+        border-radius: 8px;
         border: 3px solid transparent;
         /* градиентная рамка: фон по padding-box + градиент по border-box */
         background:
@@ -417,18 +462,19 @@
         transform: scale(0.95);
     }
 
-    /* главная кнопка ролла: круг на нижней грани по центру */
+    /* главная кнопка ролла: скруглённый прямоугольник, низ вровень с низом виджета */
     .roll-fab {
         position: absolute;
-        bottom: 0;
+        bottom: 20px;
         left: 50%;
-        transform: translate(-50%, 50%);
+        transform: translate(-50%, 0);
         z-index: 3;
-        width: 56px;
-        height: 56px;
+        height: 38px;
+        min-width: 96px;
+        padding: 0 1.5em;
         display: grid;
         place-items: center;
-        border-radius: 50%;
+        border-radius: 12px;
         border: 3px solid var(--card-bg);
         background: linear-gradient(
             135deg,
@@ -436,33 +482,67 @@
             color-mix(in srgb, var(--accent), #000 28%)
         );
         color: #fff;
+        font-weight: 800;
+        font-size: 0.95em;
+        letter-spacing: 0.12em;
         cursor: pointer;
         box-shadow: 0 4px 14px rgba(0, 0, 0, 0.38);
         transition:
-            transform 0.14s,
+            transform 0.22s cubic-bezier(0.34, 1.7, 0.5, 1),
             filter 0.2s;
     }
-    .roll-fab svg {
-        width: 26px;
-        height: 26px;
-        fill: none;
-        stroke: currentColor;
-        stroke-width: 2.4;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-    }
+    /* hover: вся кнопка слегка трясётся (центрирование -50% сохраняем в кейфреймах) */
     .roll-fab:hover {
-        transform: translate(-50%, 50%) scale(1.08);
+        animation: roll-shake 0.3s ease-in-out infinite;
     }
+    @keyframes roll-shake {
+        0%,
+        100% {
+            transform: translate(-50%, 0) rotate(0deg);
+        }
+        25% {
+            transform: translate(-52%, 0) rotate(-3deg);
+        }
+        75% {
+            transform: translate(-48%, 0) rotate(3deg);
+        }
+    }
+    /* нажатие: тряску глушим, кнопка вдавливается вниз и пружинит обратно */
     .roll-fab:active {
-        transform: translate(-50%, 50%) scale(0.96);
+        animation: none;
+        transform: translate(-50%, 3px);
     }
-    .roll-fab.spinning svg {
-        animation: spin 0.7s linear infinite;
+    .roll-fab.loading {
+        pointer-events: none;
+        opacity: 0.85;
     }
-    @keyframes spin {
-        to {
-            transform: rotate(360deg);
+
+    /* всплывашка «+N EXP»: сразу плавно вверх + долгое затухание, без прыжка */
+    .exp-float {
+        position: absolute;
+        z-index: 4;
+        font-weight: 800;
+        font-size: 1.05em;
+        letter-spacing: 0.02em;
+        color: #ffd34d;
+        text-shadow:
+            0 0 1px rgba(0, 0, 0, 0.6),
+            0 2px 6px rgba(0, 0, 0, 0.5);
+        white-space: nowrap;
+        pointer-events: none;
+        animation: exp-float 2.2s ease-out forwards;
+    }
+    @keyframes exp-float {
+        0% {
+            opacity: 0;
+            transform: translate(-50%, 0);
+        }
+        10% {
+            opacity: 1;
+        }
+        100% {
+            opacity: 0;
+            transform: translate(-50%, -90px);
         }
     }
 
@@ -628,7 +708,7 @@
         position: absolute;
         inset: 0;
         z-index: 5;
-        border-radius: 13px;
+        border-radius: 6px;
         padding: 1.4em 1.6em;
         display: flex;
         flex-direction: column;
@@ -698,6 +778,20 @@
         width: 100%;
         height: 22px;
         margin: 0;
+        cursor: pointer;
+        accent-color: var(--accent);
+    }
+
+    .toggle {
+        display: flex;
+        align-items: center;
+        gap: 0.5em;
+        cursor: pointer;
+        font-weight: 600;
+    }
+    .toggle input {
+        width: 16px;
+        height: 16px;
         cursor: pointer;
         accent-color: var(--accent);
     }
